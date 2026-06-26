@@ -1,5 +1,9 @@
 # NBL Subtitle Task Force
 
+<p align="center">
+  <img src="ui/app-icon.png" alt="NBL Subtitle Task Force icon" width="180">
+</p>
+
 [NBL](https://space.bilibili.com/2823101) Subtitle Task Force 是一个面向英语 SRT 字幕的本地智能 Agent 翻译工具。默认翻译目标是网络视频字幕，译文面向普通中文观众，优先通俗易懂和自然顺口。
 
 核心流程：
