@@ -1,5 +1,14 @@
-import { useEffect, useRef, type Dispatch, type SetStateAction } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type Dispatch,
+  type DragEvent,
+  type SetStateAction,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getFirstSupportedSubtitleFile } from "./subtitleFile";
 
 export const BACKEND_HOST = "127.0.0.1";
 const BACKEND_TOKEN_HEADER = "X-NBL-Subtitle-Token";
@@ -60,6 +69,10 @@ function stageClass(index: number, activeStage: number, progress: number, isWork
   return "is-pending";
 }
 
+function hasDraggedFiles(dataTransfer: DataTransfer): boolean {
+  return Array.from(dataTransfer.types).includes("Files");
+}
+
 interface Props {
   file: File | null;
   setFile: (f: File | null) => void;
@@ -100,6 +113,7 @@ export default function TranslationView(props: Props) {
   const jobIdRef = useRef<string | null>(null);
   const pollingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const backendConfigRef = useRef<BackendConfig | null>(null);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
 
   const stopPolling = () => {
     if (pollingTimerRef.current !== null) {
@@ -113,10 +127,81 @@ export default function TranslationView(props: Props) {
     if (container && logsEndRef.current) {
       const atBottom = container.scrollHeight - container.clientHeight <= container.scrollTop + 1;
       if (atBottom) {
-        logsEndRef.current.scrollIntoView({ behavior: "smooth" });
+        container.scrollTop = container.scrollHeight;
       }
     }
   }, [logs]);
+
+  const selectSubtitleFile = (nextFile: File) => {
+    setFile(nextFile);
+    setLogs([{ text: `- 已选择文件: ${nextFile.name}`, isError: false }]);
+    setStatus("文件已就绪");
+    setProgress(0);
+    setIsWorking(false);
+    setIsError(false);
+  };
+
+  const rejectFileImport = (message: string) => {
+    setLogs(prev => [...prev, { text: `[错误] ${message}`, isError: true }]);
+    setStatus(message);
+    setIsError(true);
+  };
+
+  const handleFileInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const nextFile = getFirstSupportedSubtitleFile(event.target.files);
+    if (nextFile) {
+      selectSubtitleFile(nextFile);
+    } else if (event.target.files && event.target.files.length > 0) {
+      rejectFileImport("仅支持 .srt 字幕文件");
+    }
+    event.currentTarget.value = "";
+  };
+
+  const handleUploadDragEnter = (event: DragEvent<HTMLLabelElement>) => {
+    if (!hasDraggedFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!isWorking) setIsDraggingFile(true);
+  };
+
+  const handleUploadDragOver = (event: DragEvent<HTMLLabelElement>) => {
+    if (!hasDraggedFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!isWorking) {
+      event.dataTransfer.dropEffect = "copy";
+      setIsDraggingFile(true);
+    } else {
+      event.dataTransfer.dropEffect = "none";
+    }
+  };
+
+  const handleUploadDragLeave = (event: DragEvent<HTMLLabelElement>) => {
+    if (!hasDraggedFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDraggingFile(false);
+  };
+
+  const handleUploadDrop = (event: DragEvent<HTMLLabelElement>) => {
+    if (!hasDraggedFiles(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDraggingFile(false);
+
+    if (isWorking) {
+      rejectFileImport("任务运行中，暂不能更换文件");
+      return;
+    }
+
+    const nextFile = getFirstSupportedSubtitleFile(event.dataTransfer.files);
+    if (!nextFile) {
+      rejectFileImport("仅支持 .srt 字幕文件");
+      return;
+    }
+
+    selectSubtitleFile(nextFile);
+  };
 
   const cancelTranslation = async () => {
     if (!jobIdRef.current) return;
@@ -293,20 +378,31 @@ export default function TranslationView(props: Props) {
             <span className={`caption-state ${file ? "ready" : ""}`}>{file ? "SRT READY" : "WAITING"}</span>
           </div>
           <div className="ti8-upload">
-            <input type="file" accept=".srt" onChange={(e) => {
-              if (e.target.files?.[0]) {
-                setFile(e.target.files[0]);
-                setLogs([{ text: `- 已选择文件: ${e.target.files[0].name}`, isError: false }]);
-                setStatus("文件已就绪");
-                setProgress(0); setIsWorking(false); setIsError(false);
-              }
-            }} id="ti-up" />
-            <label htmlFor="ti-up" className={`ti8-btn-upload ${file ? "has-file" : ""}`}>
+            <input
+              type="file"
+              accept=".srt"
+              disabled={isWorking}
+              onChange={handleFileInputChange}
+              id="ti-up"
+            />
+            <label
+              htmlFor="ti-up"
+              className={`ti8-btn-upload ${file ? "has-file" : ""} ${isDraggingFile ? "is-dragging" : ""} ${isWorking ? "is-disabled" : ""}`}
+              aria-disabled={isWorking}
+              onDragEnter={handleUploadDragEnter}
+              onDragOver={handleUploadDragOver}
+              onDragLeave={handleUploadDragLeave}
+              onDrop={handleUploadDrop}
+            >
               <span className="upload-badge">SRT</span>
               <span className="upload-copy">
                 <span className="label-main">{file ? file.name : "选择字幕文件"}</span>
                 <span className="label-sub">
-                  {file ? `${formatFileSize(file.size)} · 点击更换文件` : "导入 .srt，保留时间轴与字幕序号"}
+                  {file
+                    ? `${formatFileSize(file.size)} · ${isWorking ? "任务运行中" : "点击或拖入文件以更换"}`
+                    : isDraggingFile
+                      ? "松开即可导入 .srt 文件"
+                      : "点击或拖入 .srt，保留时间轴与字幕序号"}
                 </span>
               </span>
             </label>

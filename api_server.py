@@ -39,7 +39,7 @@ async def lifespan(app: FastAPI):
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("api_server")
 
-app = FastAPI(title="NBL Subtitle Task Force API", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="NBL Subtitle Task Force API", version="2.0.1", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

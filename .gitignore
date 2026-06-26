@@ -12,6 +12,7 @@ build/
 # Node.js / Tauri 忽略项
 ui/node_modules/
 ui/dist/
+ui/.tmp-tests/
 ui/src-tauri/target/
 ui/src-tauri/bin/
 

@@ -298,6 +298,16 @@ textarea:focus-visible {
   border-color: rgba(122, 162, 255, 0.55);
 }
 
+.ti8-btn-upload.is-dragging {
+  background: rgba(122, 162, 255, 0.14);
+  border-color: rgba(93, 214, 214, 0.72);
+}
+
+.ti8-btn-upload.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
 .upload-badge {
   align-items: center;
   background: #111a27;

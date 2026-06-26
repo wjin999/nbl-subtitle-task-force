@@ -8,7 +8,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-set APP_VERSION=2.0.0
+set APP_VERSION=2.0.1
 set TAG_NAME=v%APP_VERSION%
 set RELEASE_DIR=release\%APP_VERSION%
 

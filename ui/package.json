@@ -1,11 +1,12 @@
 {
   "name": "nbl-subtitle-task-force-ui",
   "private": true,
-  "version": "2.0.0",
+  "version": "2.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test:subtitle-file": "tsc --module NodeNext --moduleResolution NodeNext --target ES2022 --lib ES2022,DOM --skipLibCheck --outDir .tmp-tests --rootDir src/components src/components/subtitleFile.ts && node --test test/subtitleFile.test.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

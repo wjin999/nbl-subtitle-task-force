@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 title NBL Subtitle Task Force - Release Build
 
-set APP_VERSION=2.0.0
+set APP_VERSION=2.0.1
 set RELEASE_DIR=release\%APP_VERSION%
 
 echo ============================================
