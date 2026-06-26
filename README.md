@@ -1,8 +1,6 @@
 # NBL Subtitle Task Force
 
-NBL Subtitle Task Force 是一个面向英语 SRT 字幕的本地智能 Agent 翻译工具。默认翻译目标是网络视频字幕，译文面向普通中文观众，优先通俗易懂和自然顺口。
-
-GitHub 英文项目名：`nbl-subtitle-task-force`
+[NBL](https://space.bilibili.com/2823101) Subtitle Task Force 是一个面向英语 SRT 字幕的本地智能 Agent 翻译工具。默认翻译目标是网络视频字幕，译文面向普通中文观众，优先通俗易懂和自然顺口。
 
 核心流程：
 
@@ -14,12 +12,3 @@ GitHub 英文项目名：`nbl-subtitle-task-force`
 6. 对译文做时间轴复审，并按术语、人物称呼和重复短语定点审计
 7. 使用运行清单验证断点恢复，避免复用已失效的中间结果
 8. 输出翻译后的 SRT 和 `.agent-report.json` 翻译报告
-
-默认输出：
-
-- `translated_*.srt`
-- `translated_*.agent-report.json`
-- 大量失败或重试时：`translated_*.agent-report.json.failures.ndjson` / `.retries.ndjson`
-- 可选：`merged_*.srt`
-
-当前版本：2.0.0
