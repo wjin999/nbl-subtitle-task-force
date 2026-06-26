@@ -1,10 +1,10 @@
 @echo off
-title AISubtitleTranslator - Build
+title NBL Subtitle Task Force - Build
 
-set APP_VERSION=1.1.0
+set APP_VERSION=2.0.0
 
 echo ============================================
-echo   AISubtitleTranslator Build Script
+echo   NBL Subtitle Task Force Build Script
 echo ============================================
 echo.
 
@@ -17,15 +17,8 @@ echo OK.
 
 REM === 2. Install Python deps ===
 echo [2/5] Installing Python dependencies...
-pip install -e .[server] pyinstaller
+python -m pip install -r requirements-build.txt
 if %errorlevel% neq 0 goto :err_pip
-echo Installing spaCy model (core feature)...
-python -m spacy download en_core_web_sm
-if %errorlevel% neq 0 goto :err_spacy
-python -m spacy download ja_core_news_sm
-if %errorlevel% neq 0 goto :err_spacy
-python -m spacy download ko_core_news_sm
-if %errorlevel% neq 0 goto :err_spacy
 echo OK.
 
 REM === 3. Build Python backend ===
@@ -80,10 +73,6 @@ pause & exit /b 1
 
 :err_pip
 echo [ERROR] pip install failed
-pause & exit /b 1
-
-:err_spacy
-echo [ERROR] spaCy model install failed
 pause & exit /b 1
 
 :err_pyinstaller

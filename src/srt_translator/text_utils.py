@@ -42,11 +42,9 @@ def clean_translated_text(text: str) -> str:
     # 3. 移除多余的特殊字符，但保留正常标点
     text = re.sub(REMOVABLE_PUNCTUATION, ' ', text)
     
-    # 3.5 移除中日韩句尾的句号（影视剧字幕规范：句末不加句号）
+    # 3.5 移除中文句尾的句号（影视剧字幕规范：句末不加句号）
     # 但保留问号和叹号
-    # 在文本包含中日韩越字符时，移除句尾句号
-    # 检测范围：CJK 统一表意文字、平假名、片假名、韩文
-    if re.search(r'[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]', text):
+    if re.search(r'[\u4e00-\u9fff]', text):
         text = re.sub(r'[。]+$', '', text)  # 移除末尾句号
         text = re.sub(r'([？！……])[。]+', r'\1', text)  # 问号/叹号/省略号后面的句号
     

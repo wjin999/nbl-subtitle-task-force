@@ -1,12 +1,12 @@
 @echo off
 setlocal enabledelayedexpansion
-title AISubtitleTranslator - Release Build
+title NBL Subtitle Task Force - Release Build
 
-set APP_VERSION=1.1.0
+set APP_VERSION=2.0.0
 set RELEASE_DIR=release\%APP_VERSION%
 
 echo ============================================
-echo   AISubtitleTranslator v%APP_VERSION% Build
+echo   NBL Subtitle Task Force v%APP_VERSION% Build
 echo ============================================
 echo.
 
@@ -19,15 +19,8 @@ echo       OK.
 
 REM === 2. Install Python build deps ===
 echo [2/6] Installing Python build dependencies...
-pip install -e .[server] pyinstaller >nul 2>&1
+python -m pip install -r requirements-build.txt >nul 2>&1
 if %errorlevel% neq 0 goto :err_pip
-echo       Installing spaCy model (core feature)...
-python -m spacy download en_core_web_sm
-if %errorlevel% neq 0 goto :err_spacy
-python -m spacy download ja_core_news_sm
-if %errorlevel% neq 0 goto :err_spacy
-python -m spacy download ko_core_news_sm
-if %errorlevel% neq 0 goto :err_spacy
 echo       OK.
 
 REM === 3. Build Python backend (api-server.exe) ===
@@ -103,8 +96,9 @@ if exist "%BUNDLE_DIR%\dmg\*%APP_VERSION%*.dmg" (
 )
 
 if %FOUND% equ 0 (
-    echo       WARNING: No bundle files found at %BUNDLE_DIR%
+    echo       ERROR: No bundle files found at %BUNDLE_DIR%
     echo       Check that Tauri build completed successfully.
+    goto :err_no_bundles
 )
 
 echo.
@@ -134,10 +128,6 @@ pause & exit /b 1
 echo [ERROR] pip install failed
 pause & exit /b 1
 
-:err_spacy
-echo [ERROR] spaCy model install failed
-pause & exit /b 1
-
 :err_pyinstaller
 echo [ERROR] PyInstaller build failed
 pause & exit /b 1
@@ -159,4 +149,8 @@ echo Common causes:
 echo   1. Missing Windows SDK - install Visual Studio Build Tools
 echo   2. api-server.exe not placed in ui/src-tauri/bin/
 echo   3. Network issue when downloading cargo crates
+pause & exit /b 1
+
+:err_no_bundles
+echo [ERROR] Release artifacts were not collected.
 pause & exit /b 1

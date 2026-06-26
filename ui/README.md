@@ -1,6 +1,6 @@
-# Tauri + React + Typescript
+# NBL Subtitle Task Force UI
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+Tauri + React + TypeScript desktop UI for NBL Subtitle Task Force.
 
 ## Recommended IDE Setup
 

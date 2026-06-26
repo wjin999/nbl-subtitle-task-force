@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
-title AISubtitleTranslator - Push and Release
+title NBL Subtitle Task Force - Push and Release
 cd /d "%~dp0"
 if errorlevel 1 (
     echo [ERROR] Failed to enter script directory.
@@ -8,12 +8,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
-set APP_VERSION=1.1.0
+set APP_VERSION=2.0.0
 set TAG_NAME=v%APP_VERSION%
 set RELEASE_DIR=release\%APP_VERSION%
 
 echo ============================================
-echo   AISubtitleTranslator - Push and Release
+echo   NBL Subtitle Task Force - Push and Release
 echo ============================================
 echo.
 
@@ -36,6 +36,9 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+
+call :verify_assets
+if errorlevel 1 exit /b 1
 
 REM === 1. Stage files ===
 echo [1/4] Staging files...
@@ -83,7 +86,7 @@ if %errorlevel% equ 0 (
     echo Old tag removed.
 )
 
-git tag -a "%TAG_NAME%" -m "AISubtitleTranslator v%APP_VERSION%"
+git tag -a "%TAG_NAME%" -m "NBL Subtitle Task Force v%APP_VERSION%"
 if errorlevel 1 goto :err_tag_create
 echo Tag %TAG_NAME% created.
 
@@ -104,32 +107,25 @@ echo.
 echo ------ Create GitHub Release ------
 
 REM Check if installers exist
-set HAS_ASSETS=0
-if exist "%RELEASE_DIR%\*%APP_VERSION%*.msi" set HAS_ASSETS=1
-if exist "%RELEASE_DIR%\*%APP_VERSION%*.exe" set HAS_ASSETS=1
-if %HAS_ASSETS% equ 0 (
-    echo [ERROR] No installer packages for v%APP_VERSION% found in %RELEASE_DIR%.
-    echo Run release-build.bat before publishing.
-    pause
-    exit /b 1
-)
+call :verify_assets
+if errorlevel 1 exit /b 1
 
-set "RELEASE_NOTES_FILE=%TEMP%\AISubtitleTranslator-release-notes-%APP_VERSION%.md"
+set "RELEASE_NOTES_FILE=%TEMP%\nbl-subtitle-task-force-release-notes-%APP_VERSION%.md"
 (
-    echo ## AISubtitleTranslator v%APP_VERSION%
+    echo ## NBL Subtitle Task Force v%APP_VERSION%
     echo.
     echo ### Added
-    echo - Added automatic timeline-based subtitle quality check after translation, with a settings toggle.
-    echo - Restricted API configuration to DeepSeek only, with no provider or base URL selection.
+    echo - Reworked translation into a streaming NBL Agent workflow with window analysis, global AgentPlan, draft translation, review, audit, and report output.
+    echo - Added NDJSON spool files for recoverable long-file processing.
+    echo - Added automatic `.agent-report.json` translation reports.
     echo - Added an option to save spaCy merged source subtitles.
-    echo - Added max output tokens and request timeout settings for DeepSeek requests.
     echo.
     echo ### Removed
-    echo - Removed OpenAI / ChatGPT provider presets and OpenAI API key fallback.
-    echo - Removed temperature and reasoning effort settings from the UI and API request flow.
+    echo - Removed Japanese and Korean spaCy model support; English smart sentence merging is now the only merge path.
+    echo - Removed UI/API toggles for disabling merge or timeline review.
     echo.
     echo ### Fixed
-    echo - Improved runtime workspace selection to avoid upload failures when the project workspace directory is not writable.
+    echo - Updated app naming and GitHub metadata for NBL Subtitle Task Force.
     echo.
     echo ### Build
     echo - Windows: .msi / .exe installer
@@ -138,7 +134,7 @@ set "RELEASE_NOTES_FILE=%TEMP%\AISubtitleTranslator-release-notes-%APP_VERSION%.
 
 echo Creating release with installer packages...
 gh release create "%TAG_NAME%" ^
-    --title "AISubtitleTranslator v%APP_VERSION%" ^
+    --title "NBL Subtitle Task Force v%APP_VERSION%" ^
     --notes-file "%RELEASE_NOTES_FILE%" ^
     "%RELEASE_DIR%\*%APP_VERSION%*"
 
@@ -151,7 +147,7 @@ if not errorlevel 1 (
     echo.
     echo [WARNING] Release creation failed.
     echo You can create it manually at:
-    echo   https://github.com/wjin999/AISubtitleTranslator/releases/new
+    echo   https://github.com/wjin999/nbl-subtitle-task-force/releases/new
     echo   Select tag: %TAG_NAME%
 )
 
@@ -183,3 +179,22 @@ exit /b 1
 echo [ERROR] Failed to create tag %TAG_NAME%.
 pause
 exit /b 1
+
+:verify_assets
+set HAS_MSI=0
+set HAS_EXE=0
+if exist "%RELEASE_DIR%\*%APP_VERSION%*.msi" set HAS_MSI=1
+if exist "%RELEASE_DIR%\*%APP_VERSION%*.exe" set HAS_EXE=1
+if %HAS_MSI% neq 1 (
+    echo [ERROR] No MSI installer package for v%APP_VERSION% found in %RELEASE_DIR%.
+    echo Run release-build.bat before publishing.
+    pause
+    exit /b 1
+)
+if %HAS_EXE% neq 1 (
+    echo [ERROR] No EXE installer package for v%APP_VERSION% found in %RELEASE_DIR%.
+    echo Run release-build.bat before publishing.
+    pause
+    exit /b 1
+)
+exit /b 0

@@ -1,1 +1,1 @@
-"""Test suite for srt-translator."""
+"""Test suite for NBL Subtitle Task Force."""

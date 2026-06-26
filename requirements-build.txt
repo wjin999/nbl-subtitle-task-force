@@ -1,0 +1,10 @@
+-e .[server]
+openai==2.32.0
+tqdm==4.67.3
+python-dotenv==1.2.2
+spacy==3.8.14
+fastapi==0.136.0
+uvicorn[standard]==0.44.0
+python-multipart==0.0.26
+pyinstaller==6.19.0
+en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl

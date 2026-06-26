@@ -1,8 +1,8 @@
 {
-  "productName": "AISubtitleTranslator",
-  "version": "1.1.0",
+  "productName": "NBL Subtitle Task Force",
+  "version": "2.0.0",
 
-  "identifier": "com.wjin999.aisubtitletranslator",
+  "identifier": "com.wjin999.nblsubtitletaskforce",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "wjin999/AISubtitleTranslator",
+        "title": "NBL Subtitle Task Force",
         "width": 480,
         "height": 580,
         "resizable": true,
@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:18770; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:*; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
     }
   },
   "bundle": {
@@ -35,6 +35,11 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico"
+      }
+    }
   }
 }

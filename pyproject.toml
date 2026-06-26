@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "srt-translator"
-version = "1.1.0"
-description = "基于 LLM 的异步字幕翻译工具 / Async LLM-powered subtitle translator"
+name = "nbl-subtitle-task-force"
+version = "2.0.0"
+description = "NBL Subtitle Task Force"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
@@ -20,7 +20,8 @@ keywords = [
     "deepseek",
     "nlp",
     "spacy",
-    "async"
+    "async",
+    "agent"
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -67,12 +68,12 @@ all = [
 ]
 
 [project.scripts]
-srt-translator = "srt_translator.cli:main"
+nbl-subtitle-task-force = "srt_translator.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/wjin999/srt-translator"
-Repository = "https://github.com/wjin999/srt-translator"
-Issues = "https://github.com/wjin999/srt-translator/issues"
+Homepage = "https://github.com/wjin999/nbl-subtitle-task-force"
+Repository = "https://github.com/wjin999/nbl-subtitle-task-force"
+Issues = "https://github.com/wjin999/nbl-subtitle-task-force/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -3,12 +3,10 @@
 import sys, os, importlib
 from pathlib import Path
 
-# spaCy is a core feature — always bundle English, Japanese, and Korean models.
+# spaCy is a core feature — always bundle the English model.
 
 SPACY_MODELS = (
     'en_core_web_sm',
-    'ja_core_news_sm',
-    'ko_core_news_sm',
 )
 
 
@@ -25,27 +23,16 @@ def _find_spacy_model_dir(model_name):
         return None
 
 
-def _find_package_dir(package_name):
-    """Find an optional dependency package data path for PyInstaller."""
-    try:
-        package_module = importlib.import_module(package_name)
-        package_file = getattr(package_module, '__file__', None)
-        if package_file:
-            return os.path.dirname(package_file)
-    except ImportError:
-        pass
-    return None
-
 _datas = [('src/srt_translator', 'srt_translator')]
 _hiddenimports = [
     'srt_translator',
     'srt_translator.config', 'srt_translator.models', 'srt_translator.parser',
     'srt_translator.merger', 'srt_translator.glossary', 'srt_translator.llm_client',
-    'srt_translator.pipeline', 'srt_translator.translator', 'srt_translator.text_utils',
-    'srt_translator.progress', 'srt_translator.quality_checker',
-    'spacy', 'spacy.lang.en', 'spacy.lang.ja', 'spacy.lang.ko', 'spacy.cli',
-    'en_core_web_sm', 'ja_core_news_sm', 'ko_core_news_sm',
-    'sudachipy', 'sudachidict_core', 'natto', 'thinc',
+    'srt_translator.translator', 'srt_translator.text_utils', 'srt_translator.prompts',
+    'srt_translator.agent_plan', 'srt_translator.streaming', 'srt_translator.streaming_pipeline',
+    'spacy', 'spacy.lang.en', 'spacy.cli',
+    'en_core_web_sm',
+    'thinc',
 ]
 
 for _model_name in SPACY_MODELS:
@@ -55,13 +42,6 @@ for _model_name in SPACY_MODELS:
         print(f"INFO: Bundling spaCy model {_model_name} from: {_spacy_dir}")
     else:
         print(f"WARNING: {_model_name} model not found. Install: python -m spacy download {_model_name}")
-
-for _package_name in ('sudachidict_core', 'sudachipy', 'mecab_ko_dic', 'mecab_ko'):
-    _package_dir = _find_package_dir(_package_name)
-    if _package_dir:
-        _datas.append((_package_dir, _package_name))
-        print(f"INFO: Bundling NLP dependency {_package_name} from: {_package_dir}")
-
 
 a = Analysis(
     ['api_server.py'],

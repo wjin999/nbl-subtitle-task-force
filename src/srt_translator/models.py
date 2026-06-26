@@ -66,3 +66,74 @@ class SrtEntry:
         if 'end' not in changes and self._end_cache is not None:
             new._end_cache = self._end_cache
         return new
+
+
+@dataclass
+class SubtitleBlock:
+    """A merged subtitle block with provenance for streaming agent stages."""
+
+    block_id: int
+    entry: SrtEntry
+    source_entries: list[SrtEntry]
+    source_start_index: int
+    source_end_index: int
+    stage: str = "pending"
+
+    def copy(self, **changes) -> "SubtitleBlock":
+        """Create a copy with optional field changes."""
+        return SubtitleBlock(
+            block_id=changes.get("block_id", self.block_id),
+            entry=changes.get("entry", self.entry.copy()),
+            source_entries=changes.get(
+                "source_entries",
+                [entry.copy() for entry in self.source_entries],
+            ),
+            source_start_index=changes.get("source_start_index", self.source_start_index),
+            source_end_index=changes.get("source_end_index", self.source_end_index),
+            stage=changes.get("stage", self.stage),
+        )
+
+    @staticmethod
+    def _entry_to_dict(entry: SrtEntry) -> dict:
+        return {
+            "index": entry.index,
+            "start": entry.start,
+            "end": entry.end,
+            "text": entry.text,
+        }
+
+    @staticmethod
+    def _entry_from_dict(data: dict) -> SrtEntry:
+        return SrtEntry(
+            int(data["index"]),
+            str(data["start"]),
+            str(data["end"]),
+            str(data.get("text", "")),
+        )
+
+    def to_dict(self) -> dict:
+        """Serialize to a JSON-compatible dictionary."""
+        return {
+            "block_id": self.block_id,
+            "entry": self._entry_to_dict(self.entry),
+            "source_entries": [
+                self._entry_to_dict(entry) for entry in self.source_entries
+            ],
+            "source_start_index": self.source_start_index,
+            "source_end_index": self.source_end_index,
+            "stage": self.stage,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SubtitleBlock":
+        """Deserialize from a JSON-compatible dictionary."""
+        return cls(
+            block_id=int(data["block_id"]),
+            entry=cls._entry_from_dict(data["entry"]),
+            source_entries=[
+                cls._entry_from_dict(entry) for entry in data.get("source_entries", [])
+            ],
+            source_start_index=int(data["source_start_index"]),
+            source_end_index=int(data["source_end_index"]),
+            stage=str(data.get("stage", "pending")),
+        )

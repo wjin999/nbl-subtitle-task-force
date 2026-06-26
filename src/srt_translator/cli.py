@@ -7,23 +7,14 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import List
 
 from tqdm import tqdm
 
 from .config import TranslatorConfig, DEFAULT_GLOSSARY_FILENAME
-from .models import SrtEntry
-from .parser import parse_srt, save_srt, validate_srt_file
-from .merger import init_spacy_model, merge_entries_batch
+from .parser import validate_srt_file
 from .glossary import load_glossary, Glossary
 from .llm_client import create_client
-from .progress import (
-    TranslationProgress,
-    get_progress_file,
-    load_progress,
-    delete_progress,
-)
-from .pipeline import TranslationPipeline
+from .streaming_pipeline import StreamingAgentPipeline, cleanup_spool_dir
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -39,16 +30,15 @@ def setup_logging(verbose: bool = False) -> None:
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Async LLM Subtitle Translator with Smart Merging",
+        description="NBL Subtitle Task Force",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s video.srt                     # Basic translation
+  %(prog)s video.srt                     # NBL Agent translation
   %(prog)s video.srt -o output.srt       # Specify output
   %(prog)s video.srt -g glossary.txt     # Use glossary
-  %(prog)s video.srt --no-merge          # Disable merging
   %(prog)s video.srt --save-merged       # Save spaCy merged source subtitles
-  %(prog)s video.srt --resume            # Resume interrupted translation
+  %(prog)s video.srt --resume            # Resume interrupted NBL Agent translation
         """
     )
     
@@ -66,15 +56,8 @@ Examples:
     
     # Processing options
     parser.add_argument("-o", "--output", dest="output_path", help="Output SRT file path")
-    parser.add_argument("--no-merge", action="store_true", help="Disable spaCy smart merging")
     parser.add_argument("--save-merged", action="store_true", help="Save spaCy merged source subtitles")
     parser.add_argument("--merged-output", dest="merged_output_path", help="Output path for spaCy merged source subtitles")
-    parser.add_argument(
-        "--source-language",
-        choices=["en", "ja", "ko"],
-        default="en",
-        help="Source subtitle language for smart merging: en, ja, ko",
-    )
     parser.add_argument("--max-chars", dest="max_chars_per_entry", type=int, default=300)
     parser.add_argument("--merge-gap", dest="merge_time_gap", type=float, default=1.5)
     
@@ -86,17 +69,21 @@ Examples:
     parser.add_argument("--request-timeout", type=float, default=60.0)
     
     # Custom prompts
-    parser.add_argument("--summary-prompt", help="自定义概括提示词（覆盖默认）")
-    parser.add_argument("--translation-prompt", help="自定义翻译提示词（覆盖默认）")
+    parser.add_argument("--summary-prompt", help="自定义 Agent 分析提示词（覆盖默认）")
+    parser.add_argument("--translation-prompt", help="自定义 Agent 翻译提示词（覆盖默认）")
     
     # Performance
-    parser.add_argument("--concurrency", type=int, default=8, help="Max concurrent requests")
     parser.add_argument("--chunk-size", dest="chunk_size_for_translation", type=int, default=10)
     parser.add_argument("--context-window", dest="context_window", type=int, default=7, help="上下文窗口大小，控制每个 chunk 前后的额外上下文条目数量")
+    parser.add_argument(
+        "--minimum-success-ratio",
+        type=float,
+        default=0.5,
+        help=argparse.SUPPRESS,
+    )
     
     # Progress
-    parser.add_argument("--resume", action="store_true", help="Resume from saved progress")
-    parser.add_argument("--no-progress", action="store_true", help="Disable progress saving")
+    parser.add_argument("--resume", action="store_true", help="Resume from saved Agent spool")
     
     # Misc
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
@@ -128,17 +115,6 @@ async def main_async(args: argparse.Namespace) -> int:
         logger.error(error)
         return 1
     
-    # 读取并解析 SRT
-    logger.info(f"Reading: {in_path}")
-    content = in_path.read_text(encoding="utf-8-sig")
-    entries = parse_srt(content)
-    
-    if not entries:
-        logger.error("No valid subtitle entries found")
-        return 1
-    
-    logger.info(f"Parsed {len(entries)} subtitle entries")
-    
     # 加载术语表
     glossary = Glossary()
     if args.glossary_path:
@@ -148,97 +124,91 @@ async def main_async(args: argparse.Namespace) -> int:
         logger.info(f"Auto-detected '{DEFAULT_GLOSSARY_FILENAME}'")
         glossary = load_glossary(Path(DEFAULT_GLOSSARY_FILENAME))
     
-    # spaCy smart merging
-    if getattr(args, "no_merge", False):
-        logger.info("Smart merging disabled")
-        merged_entries = [entry.copy() for entry in entries]
-    else:
-        init_spacy_model(config.source_language)
-        merged_entries = merge_entries_batch(
-            entries,
-            config.max_chars_per_entry,
-            config.merge_time_gap,
-            source_language=config.source_language,
-        )
-
-    if args.save_merged or args.merged_output_path:
-        if getattr(args, "no_merge", False):
-            logger.warning("--save-merged ignored because smart merging is disabled")
-        else:
-            if args.merged_output_path:
-                merged_out_path = Path(args.merged_output_path).expanduser().resolve()
-            else:
-                merged_out_path = in_path.with_name(f"merged_{in_path.name}")
-            save_srt(merged_entries, merged_out_path)
-            logger.info(f"Saved spaCy merged subtitles to {merged_out_path}")
-    
-    # 进度管理
-    progress_path = get_progress_file(in_path) if not args.no_progress else None
-    progress = None
-    
-    if args.resume and progress_path:
-        progress = load_progress(progress_path)
-        if progress:
-            logger.info(f"Loaded progress: {progress.completion_rate:.0%} complete")
-        else:
-            logger.info("No previous progress found, starting fresh")
-    
     # 创建 API 客户端
     client = create_client(config.api_key, timeout=config.request_timeout)
-    
-    # 初始化进度
-    total_chunks = (len(merged_entries) + config.chunk_size - 1) // config.chunk_size
-    if not progress:
-        progress = TranslationProgress.create(str(in_path), total_chunks)
-    
-    # 创建 tqdm 进度条
-    pbar = tqdm(total=total_chunks, desc="Translating", unit="chunk")
-    
-    # 使用列表作为可变容器跟踪已完成 chunk 数
-    progress_data = [0]
-    
-    # 进度回调：更新 tqdm 进度条并显示百分比
-    async def _update_progress(chunk_idx: int, pct: int):
-        progress_data[0] += 1
-        pbar.update(1)
-        pbar.set_description(f"Translating ({pct}%)")
-    
-    # 创建管道并执行翻译
-    pipeline = TranslationPipeline(config)
-    translations = await pipeline.run(
-        entries=merged_entries,
-        glossary=glossary,
-        client=client,
-        progress=progress,
-        on_progress=_update_progress,
-        progress_path=progress_path,  # 传入进度文件路径，由 pipeline 自动增量保存
-        summary_prompt=args.summary_prompt,
-        translation_prompt=args.translation_prompt,
-    )
-    
-    pbar.close()
-    
-    # 构建输出
-    final_entries: List[SrtEntry] = []
-    for i, entry in enumerate(merged_entries):
-        translated_text = translations.get(i, entry.text)
-        final_entries.append(entry.copy(text=translated_text))
-    
-    # 保存结果
+
     if args.output_path:
         out_path = Path(args.output_path)
     else:
         out_path = in_path.with_name(f"{config.output_prefix}{in_path.name}")
-    
-    save_srt(final_entries, out_path)
-    
-    # 清理进度文件
-    if progress_path and progress_path.exists():
-        delete_progress(progress_path)
-    
-    # 统计
-    success_count = sum(1 for r in translations.values() if r)
-    logger.info(f"Done! {success_count}/{len(merged_entries)} translated. Saved to {out_path}")
+
+    report_path = out_path.with_name(f"{out_path.stem}{config.report_suffix}")
+    merged_out_path = None
+    if args.save_merged or args.merged_output_path:
+        merged_out_path = (
+            Path(args.merged_output_path).expanduser().resolve()
+            if args.merged_output_path
+            else in_path.with_name(f"merged_{in_path.name}")
+        )
+
+    spool_dir = in_path.with_suffix(in_path.suffix + ".agent-spool")
+    if not args.resume and spool_dir.exists():
+        cleanup_spool_dir(spool_dir)
+
+    pbar = tqdm(total=100, desc="Agent", unit="%")
+    progress_state = {"value": 0, "stage": ""}
+    stage_ranges = {
+        "reading": (0, 10),
+        "planning": (10, 30),
+        "translating": (30, 72),
+        "reviewing": (72, 84),
+        "auditing": (84, 95),
+        "writing": (95, 100),
+    }
+
+    async def _progress(stage: str, pct: int):
+        start, end = stage_ranges.get(stage, (0, 100))
+        mapped = start + int((end - start) * pct / 100)
+        delta = max(0, mapped - progress_state["value"])
+        if delta:
+            pbar.update(delta)
+        progress_state["value"] = max(progress_state["value"], mapped)
+        progress_state["stage"] = stage
+        pbar.set_description(f"Agent {stage} ({mapped}%)")
+
+    async def _log(stage: str, message: str, is_error: bool = False):
+        if is_error:
+            logger.warning("[%s] %s", stage, message)
+        else:
+            logger.info("[%s] %s", stage, message)
+
+    pipeline = StreamingAgentPipeline(config)
+    try:
+        result = await pipeline.run_file(
+            input_path=in_path,
+            output_path=out_path,
+            report_path=report_path,
+            glossary=glossary,
+            client=client,
+            summary_prompt=args.summary_prompt,
+            translation_prompt=args.translation_prompt,
+            merged_output_path=merged_out_path,
+            spool_dir=spool_dir,
+            resume=args.resume,
+            on_progress=_progress,
+            on_log=_log,
+        )
+    except Exception as exc:
+        pbar.close()
+        logger.error(str(exc))
+        return 1
+    pbar.close()
+
+    cleanup_spool_dir(spool_dir)
+
+    logger.info(
+        "Done! %s/%s blocks translated; %s preserved as original. Saved to %s. Report: %s",
+        result.translated_count,
+        result.block_count,
+        result.fallback_original_count,
+        out_path,
+        report_path,
+    )
+    if result.status == "completed_with_warnings":
+        logger.warning(
+            "Translation completed with warnings: review %s preserved original blocks in the report.",
+            result.fallback_original_count,
+        )
     
     return 0
 

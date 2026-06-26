@@ -72,7 +72,7 @@ class TestValidateSrtFile:
     
     def test_valid_file(self):
         with tempfile.NamedTemporaryFile(suffix=".srt", delete=False) as f:
-            f.write(b"test content")
+            f.write(b"1\n00:00:01,000 --> 00:00:02,000\nHello\n")
             path = Path(f.name)
         
         try:
@@ -80,6 +80,16 @@ class TestValidateSrtFile:
             assert error is None
         finally:
             path.unlink()
+
+    def test_default_validation_does_not_reject_by_file_size(self, tmp_path):
+        path = tmp_path / "large.srt"
+        path.write_text(
+            "1\n00:00:01,000 --> 00:00:02,000\nHello\n\n" + (" " * 64),
+            encoding="utf-8",
+        )
+
+        assert validate_srt_file(path) is None
+        assert "File too large" in validate_srt_file(path, max_size_bytes=16)
 
 
 class TestSaveSrt:

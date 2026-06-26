@@ -6,7 +6,6 @@ import logging
 import os
 from dataclasses import dataclass
 from typing import Optional
-from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -27,22 +26,22 @@ class TranslatorConfig:
     max_output_tokens: int = 4096
     request_timeout: float = 60.0
     
-    # Processing settings
-    concurrency: int = 8
+    # Agent processing settings
     chunk_size: int = 10
     context_window: int = 7
-    source_language: str = "en"
+    analysis_window_entries: int = 120
+    analysis_window_max_chars: int = 9000
+    repair_attempts: int = 3
+    minimum_success_ratio: float = 0.5
     
-    # Merge settings (spaCy smart merging is always enabled)
+    # English smart merge settings (spaCy smart merging is always enabled)
     max_chars_per_entry: int = 300
     merge_time_gap: float = 1.5
     
     # Output settings
     output_prefix: str = "translated_"
-    
-    # Progress settings
-    save_progress: bool = True
-    progress_file: Optional[Path] = None
+    report_enabled: bool = True
+    report_suffix: str = ".agent-report.json"
     
     # Deprecated model names
     DEPRECATED_MODELS = {"deepseek-reasoner"}
@@ -74,16 +73,22 @@ class TranslatorConfig:
         if summary_model_name is None:
             summary_model_name = os.environ.get("DEEPSEEK_SUMMARY_MODEL", "deepseek-v4-pro")
 
+        minimum_success_ratio = getattr(args, 'minimum_success_ratio', 0.5)
+        if not isinstance(minimum_success_ratio, (int, float)):
+            minimum_success_ratio = 0.5
+
         return cls(
             api_key=api_key,
             model_name=model_name,
             summary_model_name=summary_model_name,
             max_output_tokens=getattr(args, 'max_output_tokens', 4096),
             request_timeout=getattr(args, 'request_timeout', 60.0),
-            concurrency=getattr(args, 'concurrency', 8),
             chunk_size=getattr(args, 'chunk_size_for_translation', 10),
             context_window=getattr(args, 'context_window', 7),
-            source_language=getattr(args, 'source_language', "en"),
+            analysis_window_entries=getattr(args, 'analysis_window_entries', 120),
+            analysis_window_max_chars=getattr(args, 'analysis_window_max_chars', 9000),
+            repair_attempts=getattr(args, 'repair_attempts', 3),
+            minimum_success_ratio=minimum_success_ratio,
             max_chars_per_entry=getattr(args, 'max_chars_per_entry', 300),
             merge_time_gap=getattr(args, 'merge_time_gap', 1.5),
         )
@@ -104,14 +109,32 @@ class TranslatorConfig:
         if not self.summary_model_name:
             return "Summary model name is required"
         
-        if self.concurrency < 1 or self.concurrency > 50:
-            return f"Concurrency must be 1-50, got {self.concurrency}"
-        
         if self.chunk_size < 1 or self.chunk_size > 50:
             return f"Chunk size must be 1-50, got {self.chunk_size}"
 
-        if self.source_language not in {"en", "ja", "ko"}:
-            return f"Source language must be one of en, ja, ko; got {self.source_language}"
+        if self.context_window < 0 or self.context_window > 100:
+            return f"Context window must be 0-100, got {self.context_window}"
+
+        if self.analysis_window_entries < 10 or self.analysis_window_entries > 1000:
+            return (
+                "Analysis window entries must be 10-1000, "
+                f"got {self.analysis_window_entries}"
+            )
+
+        if self.analysis_window_max_chars < 1000 or self.analysis_window_max_chars > 50000:
+            return (
+                "Analysis window max chars must be 1000-50000, "
+                f"got {self.analysis_window_max_chars}"
+            )
+
+        if self.repair_attempts < 1 or self.repair_attempts > 5:
+            return f"Repair attempts must be 1-5, got {self.repair_attempts}"
+
+        if not 0 < self.minimum_success_ratio <= 1:
+            return (
+                "Minimum success ratio must be greater than 0 and at most 1, "
+                f"got {self.minimum_success_ratio}"
+            )
 
         if self.max_output_tokens < 256 or self.max_output_tokens > 32768:
             return f"Max output tokens must be 256-32768, got {self.max_output_tokens}"
@@ -139,6 +162,3 @@ DEFAULT_GLOSSARY_FILENAME = "glossary.txt"
 
 # Supported file extensions
 SUPPORTED_EXTENSIONS = {".srt"}
-
-# Progress file suffix
-PROGRESS_SUFFIX = ".progress.json"

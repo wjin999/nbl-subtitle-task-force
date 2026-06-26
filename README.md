@@ -1,5 +1,25 @@
-# AISubtitleTranslator
+# NBL Subtitle Task Force
 
-使用spaCy智能合并短句，调用DeepSeek API进行视频字幕的翻译工具。
+NBL Subtitle Task Force 是一个面向英语 SRT 字幕的本地智能 Agent 翻译工具。默认翻译目标是网络视频字幕，译文面向普通中文观众，优先通俗易懂和自然顺口。
 
-[nblfps](https://space.bilibili.com/2823101)
+GitHub 英文项目名：`nbl-subtitle-task-force`
+
+核心流程：
+
+1. 流式读取 SRT，并使用 spaCy 英语模型智能合并被切碎的字幕句子
+2. 按窗口生成结构化分析，再通过层级归并生成全局 AgentPlan
+3. 按时间顺序翻译，使用滚动翻译记忆保持术语和语气一致
+4. chunk 结构异常时自动缩小重试，单条仍失败则保留原文并以警告完成
+5. API 或模型系统性故障会中止任务，不会把原文伪装成翻译成功
+6. 对译文做时间轴复审，并按术语、人物称呼和重复短语定点审计
+7. 使用运行清单验证断点恢复，避免复用已失效的中间结果
+8. 输出翻译后的 SRT 和 `.agent-report.json` 翻译报告
+
+默认输出：
+
+- `translated_*.srt`
+- `translated_*.agent-report.json`
+- 大量失败或重试时：`translated_*.agent-report.json.failures.ndjson` / `.retries.ndjson`
+- 可选：`merged_*.srt`
+
+当前版本：2.0.0

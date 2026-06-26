@@ -9,8 +9,15 @@ import logging
 from typing import List, Dict, Any, Optional, Mapping
 from dataclasses import dataclass
 
-from .llm_client import call_llm_async
+from .llm_client import LLMCallError, call_llm_async
 from .glossary import find_matching_terms, Glossary
+from .prompts import (
+    ANALYSIS_BRIEF_SYSTEM_PROMPT,
+    NBL_AGENT_PROTOCOL,
+    REVIEW_SYSTEM_PROMPT,
+    SINGLE_RETRY_SYSTEM_PROMPT,
+    TRANSLATION_SYSTEM_PROMPT,
+)
 from .text_utils import validate_translation
 
 logger = logging.getLogger(__name__)
@@ -26,13 +33,80 @@ class TranslationResult:
     error: str = ""
 
 
-# 共享的字幕翻译规范（批量和单条重试共用）
-_SHARED_SUBTITLE_RULES = """## 字幕标点规范（必须严格遵守）：
-8. 句末不加句号（。）：无论是陈述句还是祈使句，字幕结尾一律不写句号（。）。字幕的出现和消失本身就起到了断句的作用。
-9. 必须保留问号（？）和叹号（！）：用于准确传达疑问或强烈语气。
-10. 句中停顿用空格代替逗号（，）：句子内部的停顿使用空格（半角或全角均可），不使用逗号或顿号。
-11. 省略号（……）和破折号（——）：表示话语未说完、被打断或声音拖长时规范使用。
-12. 引号（""）和括号（（））：专有名词、画外音或内心独白时正常使用。"""
+def _sample_full_text(full_text: str, max_len: int = 9000, num_segments: int = 6) -> str:
+    """Uniformly sample long subtitle text while preserving coverage."""
+    if len(full_text) <= max_len:
+        return full_text
+
+    lines = full_text.split("\n")
+    if len(lines) < num_segments * 2:
+        return full_text[: max_len // 2] + "\n...\n" + full_text[-max_len // 2 :]
+
+    segments = []
+    max_per_segment = max_len // num_segments
+    for i in range(num_segments):
+        start_idx = int(i * len(lines) / num_segments)
+        end_idx = int((i + 1) * len(lines) / num_segments)
+        segment_text = "\n".join(lines[start_idx:end_idx])
+        if len(segment_text) > max_per_segment:
+            half = max_per_segment // 2
+            segment_text = segment_text[:half] + "\n...\n" + segment_text[-half:]
+        segments.append(segment_text)
+    return "\n".join(segments)
+
+
+async def generate_agent_brief(
+    full_text: str,
+    client: Any,
+    model: str,
+    custom_prompt: str | None = None,
+    max_tokens: int | None = None,
+) -> str:
+    """
+    Generate the first-turn agent brief for the full subtitle task.
+    
+    The brief is reused by later translation and review turns so the
+    agent has one stable view of topic, tone, terminology, and risks.
+    
+    Args:
+        full_text: The full text to analyze
+        client: DeepSeek client
+        model: Model name to use
+        custom_prompt: Optional custom system prompt to override the default
+    """
+    if not full_text.strip():
+        return ""
+    
+    logger.info(f"Generating agent translation brief using model: {model}...")
+    
+    if custom_prompt:
+        system_prompt = f"""{custom_prompt}
+
+{NBL_AGENT_PROTOCOL}
+
+输出使用中文，控制在 500 字以内，直接给出策略，不要寒暄。"""
+    else:
+        system_prompt = ANALYSIS_BRIEF_SYSTEM_PROMPT
+
+    sampled = _sample_full_text(full_text)
+    
+    content = await call_llm_async(
+        client,
+        model,
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": sampled}
+        ],
+        max_retries=2,
+        max_tokens=max_tokens,
+    )
+    
+    if content:
+        logger.info(f"Agent brief generated ({len(content)} chars)")
+    else:
+        logger.warning("Failed to generate agent brief")
+    
+    return content
 
 
 async def generate_context_summary(
@@ -42,82 +116,21 @@ async def generate_context_summary(
     custom_prompt: str | None = None,
     max_tokens: int | None = None,
 ) -> str:
-    """
-    Generate a context summary for the subtitle content.
-    
-    Uses uniform multi-segment sampling to extract representative
-    portions from across the full text, ensuring the LLM sees content
-    from all parts rather than just head and tail.
-    
-    Args:
-        full_text: The full text to summarize
-        client: DeepSeek client
-        model: Model name to use
-        custom_prompt: Optional custom system prompt to override the default
-    """
-    if not full_text.strip():
-        return ""
-    
-    logger.info(f"Generating context summary using model: {model}...")
-    
-    if custom_prompt:
-        system_prompt = custom_prompt
-    else:
-        system_prompt = (
-            "你是一名专业的内容分析师。"
-            "请阅读以下文本，生成一份简洁的背景摘要，内容包括："
-            "主要话题、关键术语、角色关系以及整体基调。"
-            "用中文输出，不超过 150 字。"
-        )
-    
-    # 使用均匀多段采样提取代表性内容（每段取完整文本块）
-    max_len = 6000
-    if len(full_text) > max_len:
-        lines = full_text.split('\n')
-        num_segments = 5
-        segments = []
-        max_per_segment = max_len // num_segments  # 每段最多 1200 字符
-
-        if len(lines) >= num_segments * 2:
-            for i in range(num_segments):
-                start_idx = int(i * len(lines) / num_segments)
-                end_idx = int((i + 1) * len(lines) / num_segments)
-                segment_text = "\n".join(lines[start_idx:end_idx])
-                if len(segment_text) > max_per_segment:
-                    segment_text = segment_text[:max_per_segment // 2] + "\n...\n" + segment_text[-max_per_segment // 2:]
-                segments.append(segment_text)
-        else:
-            # 行数较少，全部使用
-            segments = lines
-
-        truncated = "\n".join(segments)
-    else:
-        truncated = full_text
-    
-    content = await call_llm_async(
+    """Backward-compatible alias for the agent brief stage."""
+    return await generate_agent_brief(
+        full_text,
         client,
         model,
-        [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": truncated}
-        ],
-        max_retries=2,
+        custom_prompt=custom_prompt,
         max_tokens=max_tokens,
     )
-    
-    if content:
-        logger.info(f"Context summary generated ({len(content)} chars)")
-    else:
-        logger.warning("Failed to generate context summary")
-    
-    return content
 
 
 def _build_translation_prompt(
     items: List[Dict[str, Any]],
     context_prev: List[str],
     context_next: List[str],
-    global_summary: str,
+    agent_brief: str,
     matched_terms: List[str],
     custom_prompt: str | None = None,
     translation_memory: Mapping[str, str] | None = None,
@@ -128,7 +141,7 @@ def _build_translation_prompt(
         items: Items to translate.
         context_prev: Previous context text.
         context_next: Next context text.
-        global_summary: Background summary.
+        agent_brief: Full-task agent translation strategy.
         matched_terms: Glossary term matches.
         custom_prompt: Optional custom system prompt.
         translation_memory: Dict mapping original text -> translated text
@@ -136,25 +149,15 @@ def _build_translation_prompt(
     """
 
     if custom_prompt:
-        system_prompt = custom_prompt
+        system_prompt = f"""{custom_prompt}
+
+{NBL_AGENT_PROTOCOL}
+
+无论自定义要求如何，必须只输出合法 JSON：
+{{"translations": [{{"id": 0, "text": "翻译"}}, ...]}}
+条目数量必须与输入完全一致。"""
     else:
-        system_prompt = f"""你是一名专业的影视字幕翻译专家，负责将字幕翻译成简体中文。
-
-## 核心要求：
-1. 输出合法 JSON 格式：{{"translations": [{{"id": 0, "text": "翻译"}}, ...]}}
-2. 输出的条目数量必须与输入完全一致
-3. 每条译文必须简洁（中文约 3-5 字符对应一秒屏幕时间）
-
-## 翻译最佳实践：
-4. 使用自然、口语化的中文，适合对话场景
-5. 保留说话者的语气和情感（愤怒、低语、讽刺、兴奋等）
-6. 保持角色语气在全篇字幕中一致
-7. 遇到习语、双关语或文化特定内容时，采用意译而非直译
-
-{_SHARED_SUBTITLE_RULES}
-
-## JSON 格式示例：
-{{"translations": [{{"id": 0, "text": "你好"}}, {{"id": 1, "text": "世界"}}]}}"""
+        system_prompt = TRANSLATION_SYSTEM_PROMPT
     
     glossary_section = ""
     if matched_terms:
@@ -178,11 +181,11 @@ def _build_translation_prompt(
     if prev_str or next_str:
         context_section = f"\n## 上下文：\n前文：{prev_str or 'N/A'}\n后文：{next_str or 'N/A'}\n"
     
-    summary_section = ""
-    if global_summary:
-        summary_section = f"\n## 背景摘要：\n{global_summary[:300]}\n"
+    brief_section = ""
+    if agent_brief:
+        brief_section = f"\n## Agent 翻译策略：\n{agent_brief[:1200]}\n"
     
-    user_prompt = f"""{summary_section}{memory_section}{glossary_section}{context_section}
+    user_prompt = f"""{brief_section}{memory_section}{glossary_section}{context_section}
 ## 请翻译以下内容：
 {json.dumps(items, ensure_ascii=False)}
 
@@ -258,7 +261,7 @@ async def _translate_single_retry(
     client: Any,
     model: str,
     original: str,
-    global_summary: str,
+    agent_brief: str,
     glossary: Glossary | Dict[str, str],
     context_prev: List[str] | None = None,
     context_next: List[str] | None = None,
@@ -270,7 +273,7 @@ async def _translate_single_retry(
         client: DeepSeek client.
         model: Model name.
         original: Original text to translate.
-        global_summary: Background summary for context.
+        agent_brief: Full-task agent translation strategy.
         glossary: Glossary for terminology.
         context_prev: Previous subtitle texts for context.
         context_next: Next subtitle texts for context.
@@ -279,20 +282,14 @@ async def _translate_single_retry(
     matched = find_matching_terms(glossary, original)
     terms = [f"{k} -> {v}" for k, v in matched.items()]
     
-    system_prompt = (
-        "你是一名专业的影视字幕翻译专家，负责将字幕翻译成简体中文。\n"
-        "只输出中文翻译，不要任何解释。\n"
-        "保持简洁（中文约 3-5 字符对应一秒屏幕时间），使用自然、口语化的中文。\n"
-        "保留说话者的语气和情感，遇到习语/双关语时采用意译。\n\n"
-        f"{_SHARED_SUBTITLE_RULES}"
-    )
+    system_prompt = SINGLE_RETRY_SYSTEM_PROMPT
     
     glossary_hint = f" 术语：{', '.join(terms)}" if terms else ""
     
     # Build context-aware user prompt
     context_lines = []
-    if global_summary:
-        context_lines.append(f"[背景摘要]：{global_summary[:200]}")
+    if agent_brief:
+        context_lines.append(f"[Agent翻译策略]：{agent_brief[:400]}")
     if context_prev:
         prev_text = " | ".join(context_prev[-3:])
         context_lines.append(f"[前文]：{prev_text}")
@@ -324,12 +321,103 @@ async def _translate_single_retry(
     return result.strip() if result else ""
 
 
+async def _review_chunk_results(
+    client: Any,
+    model: str,
+    chunk_data: List[Dict[str, Any]],
+    draft_results: List[TranslationResult],
+    context_prev: List[str],
+    context_next: List[str],
+    agent_brief: str,
+    matched_terms: List[str],
+    max_tokens: int | None,
+) -> List[TranslationResult]:
+    """Agent review turn: polish and repair a translated chunk."""
+    review_items = []
+    for local_id, (item, draft) in enumerate(zip(chunk_data, draft_results)):
+        review_items.append(
+            {
+                "id": local_id,
+                "index": item["index"],
+                "original": item["text"],
+                "draft": draft.translated if draft.success else "",
+            }
+        )
+
+    prev_str = " | ".join(context_prev[-4:]) if context_prev else ""
+    next_str = " | ".join(context_next[:4]) if context_next else ""
+    glossary_section = ""
+    if matched_terms:
+        glossary_section = "\n## 术语表（必须使用）：\n" + "\n".join(
+            [f"  - {term}" for term in matched_terms]
+        )
+
+    system_prompt = REVIEW_SYSTEM_PROMPT
+
+    user_prompt = f"""## Agent 翻译策略：
+{agent_brief[:1200] if agent_brief else "无"}
+{glossary_section}
+
+## 上下文：
+前文：{prev_str or "N/A"}
+后文：{next_str or "N/A"}
+
+## 请复审以下字幕草稿：
+{json.dumps(review_items, ensure_ascii=False)}
+
+只输出 JSON，不要解释："""
+
+    try:
+        json_str = await call_llm_async(
+            client,
+            model,
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_retries=2,
+            json_mode=True,
+            max_tokens=max_tokens,
+        )
+    except LLMCallError:
+        raise
+    except Exception as exc:
+        logger.warning("Agent review failed, keeping draft chunk: %s", exc)
+        return draft_results
+
+    reviewed_map = _parse_translation_response(json_str, len(chunk_data))
+    if not reviewed_map:
+        logger.warning("Agent review returned no usable corrections, keeping draft chunk")
+        return draft_results
+
+    reviewed: List[TranslationResult] = []
+    for i, item in enumerate(chunk_data):
+        original = item["text"]
+        fallback = draft_results[i]
+        candidate = reviewed_map.get(i, fallback.translated)
+        is_valid, error = validate_translation(original, candidate)
+        if is_valid:
+            reviewed.append(
+                TranslationResult(
+                    index=item["index"],
+                    original=original,
+                    translated=candidate,
+                    success=True,
+                )
+            )
+        else:
+            reviewed.append(fallback)
+            logger.debug("Agent review correction rejected for #%s: %s", i, error)
+
+    return reviewed
+
+
 async def translate_chunk_task(
     client: Any,
     chunk_data: List[Dict[str, Any]],
     context_prev: List[str],
     context_next: List[str],
-    global_summary: str,
+    agent_brief: str,
     glossary: Glossary | Dict[str, str],
     model: str,
     sem: asyncio.Semaphore,
@@ -339,7 +427,7 @@ async def translate_chunk_task(
     max_tokens: int | None = 4096,
 ) -> List[TranslationResult]:
     """
-    Translate a chunk of subtitle entries.
+    Translate a chunk of subtitle entries with an agent draft + review turn.
 
     Args:
         translation_memory: Dict of original -> translated from previous chunks
@@ -360,7 +448,7 @@ async def translate_chunk_task(
         matched_terms = [f"{term} -> {trans}" for term, trans in matched.items()]
         
         system_prompt, user_prompt = _build_translation_prompt(
-            items, context_prev, context_next, global_summary, matched_terms,
+            items, context_prev, context_next, agent_brief, matched_terms,
             custom_prompt=custom_translation_prompt,
             translation_memory=translation_memory,
         )
@@ -423,7 +511,7 @@ async def translate_chunk_task(
             async def _retry_one(i: int) -> tuple[int, str]:
                 original = chunk_data[i]['text']
                 retried = await _translate_single_retry(
-                    client, model, original, global_summary, glossary,
+                    client, model, original, agent_brief, glossary,
                     context_prev=context_prev,
                     context_next=context_next,
                     max_tokens=max_tokens,
@@ -444,4 +532,15 @@ async def translate_chunk_task(
                         )
                         logger.debug(f"Retry succeeded for #{i}")
         
-        return results
+        reviewed_results = await _review_chunk_results(
+            client=client,
+            model=model,
+            chunk_data=chunk_data,
+            draft_results=results,
+            context_prev=context_prev,
+            context_next=context_next,
+            agent_brief=agent_brief,
+            matched_terms=matched_terms,
+            max_tokens=max_tokens,
+        )
+        return reviewed_results

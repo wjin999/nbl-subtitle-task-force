@@ -20,19 +20,28 @@ function App() {
   const [logs, setLogs] = useState<LogEntry[]>([{ text: "- 等待操作...", isError: false }]);
 
   useEffect(() => {
-    document.title = "wjin999/AISubtitleTranslator";
+    document.title = "NBL Subtitle Task Force";
   }, []);
 
   return (
     <div className="ti8-container">
       <div className="terminal-card">
         <div className="card-header">
-          <span className="ti8-emblem" style={{ fontWeight: 'bold', letterSpacing: '1px' }}>
-            wjin999/AISubtitleTranslator
-          </span>
-          <button className="settings-toggle" onClick={() => setShowSettings(!showSettings)}>
-            {showSettings ? "[ 返回终端 ]" : "[ 系统配置 ]"}
-          </button>
+          <div className="app-brand">
+            <span className="brand-mark">ST</span>
+            <div className="brand-copy">
+              <span className="brand-title">NBL Subtitle Task Force</span>
+              <span className="brand-subtitle">Subtitle Task Force · DeepSeek · SRT</span>
+            </div>
+          </div>
+          <div className="header-actions">
+            <span className={`run-indicator ${isWorking ? "active" : isError ? "error" : ""}`}>
+              {isWorking ? "RUNNING" : isError ? "REVIEW" : "READY"}
+            </span>
+            <button className="settings-toggle" onClick={() => setShowSettings(!showSettings)}>
+              {showSettings ? "工作台" : "设置"}
+            </button>
+          </div>
         </div>
 
         {!showSettings ? (
@@ -47,13 +56,9 @@ function App() {
             sumModel={settings.sumModel} transModel={settings.transModel}
             sumPrompt={settings.sumPrompt} transPrompt={settings.transPrompt}
             savePath={settings.savePath} glossary={settings.glossary}
-            concurrency={settings.concurrency}
             maxOutputTokens={settings.maxOutputTokens}
             requestTimeout={settings.requestTimeout}
-            sourceLanguage={settings.sourceLanguage}
-            mergeEnabled={settings.mergeEnabled}
             saveMergedSubtitles={settings.saveMergedSubtitles}
-            qualityCheckEnabled={settings.qualityCheckEnabled}
           />
         ) : (
           <SettingsPanel
@@ -61,13 +66,9 @@ function App() {
             sumModel={settings.sumModel} setSumModel={settings.setSumModel}
             transModel={settings.transModel} setTransModel={settings.setTransModel}
             savePath={settings.savePath} setSavePath={settings.setSavePath}
-            concurrency={settings.concurrency} setConcurrency={settings.setConcurrency}
             maxOutputTokens={settings.maxOutputTokens} setMaxOutputTokens={settings.setMaxOutputTokens}
             requestTimeout={settings.requestTimeout} setRequestTimeout={settings.setRequestTimeout}
-            sourceLanguage={settings.sourceLanguage} setSourceLanguage={settings.setSourceLanguage}
-            mergeEnabled={settings.mergeEnabled} setMergeEnabled={settings.setMergeEnabled}
             saveMergedSubtitles={settings.saveMergedSubtitles} setSaveMergedSubtitles={settings.setSaveMergedSubtitles}
-            qualityCheckEnabled={settings.qualityCheckEnabled} setQualityCheckEnabled={settings.setQualityCheckEnabled}
             setActiveModal={setActiveModal}
             resetToDefaults={settings.resetToDefaults}
           />

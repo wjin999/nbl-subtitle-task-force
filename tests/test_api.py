@@ -6,7 +6,10 @@ from unittest.mock import patch, AsyncMock, MagicMock
 from pathlib import Path
 from fastapi.testclient import TestClient
 
-from api_server import app, JOB_STATE, JOB_TASKS
+from api_server import app, JOB_STATE, JOB_TASKS, process_translation_job
+from srt_translator.config import TranslatorConfig
+from srt_translator.llm_client import LLMCallError
+from srt_translator.streaming_pipeline import StreamingAgentResult
 
 
 @pytest.fixture
@@ -51,7 +54,6 @@ class TestTranslateEndpoint:
                     data={
                         "api_key": "test-key",
                         "model_name": "test-model",
-                        "concurrency": "2",
                         "save_merged_subtitles": "true",
                     },
                 )
@@ -61,9 +63,10 @@ class TestTranslateEndpoint:
             assert data["status"] == "success"
             assert "job_id" in data
             assert "expected_output" in data
+            assert "expected_report_output" in data
             assert "expected_merged_output" in data
             assert Path(data["expected_merged_output"]).name == "merged_test.srt"
-            assert mock_process.call_args.args[9] is True
+            assert mock_process.call_args.args[8] is True
 
             # Verify JOB_STATE was created
             job_id = data["job_id"]
@@ -100,40 +103,131 @@ class TestTranslateEndpoint:
         for i in range(6):
             JOB_STATE.pop(f"existing-{i}", None)
 
+    def test_translate_requires_local_auth_when_token_is_configured(
+        self, client, tmp_path, monkeypatch
+    ):
+        """Test translate rejects requests missing the sidecar auth token."""
+        monkeypatch.setenv("NBL_SUBTITLE_API_TOKEN", "secret-token")
+        test_file = tmp_path / "test.srt"
+        test_file.write_text(
+            "1\n00:00:01,000 --> 00:00:03,500\nHello\n",
+            encoding="utf-8",
+        )
 
-class TestQualityCheckEndpoint:
-    """Test the /api/quality-check endpoint."""
+        with open(test_file, "rb") as f:
+            response = client.post(
+                "/api/translate",
+                files={"file": ("test.srt", f, "application/octet-stream")},
+                data={"api_key": "test-key"},
+            )
 
-    def test_quality_check_with_mock_files(self, client, tmp_path):
-        original = tmp_path / "original.srt"
-        translated = tmp_path / "translated.srt"
-        original.write_text("1\n00:00:01,000 --> 00:00:03,000\nHello world\n", encoding="utf-8")
-        translated.write_text("1\n00:00:01,000 --> 00:00:03,000\n你好\n", encoding="utf-8")
+        assert response.status_code == 401
 
-        with patch("api_server.process_quality_check_job", new_callable=AsyncMock):
-            with open(original, "rb") as original_f, open(translated, "rb") as translated_f:
+    def test_translate_rejects_upload_over_configured_size(
+        self, client, tmp_path, monkeypatch
+    ):
+        """Test oversized uploads are rejected before a job is created."""
+        monkeypatch.setenv("NBL_SUBTITLE_MAX_UPLOAD_BYTES", "20")
+        test_file = tmp_path / "large.srt"
+        test_file.write_text(
+            "1\n00:00:01,000 --> 00:00:03,500\nThis line is too large\n",
+            encoding="utf-8",
+        )
+
+        with open(test_file, "rb") as f:
+            response = client.post(
+                "/api/translate",
+                files={"file": ("large.srt", f, "application/octet-stream")},
+                data={"api_key": "test-key"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "error"
+        assert "文件过大" in data["error"]
+        assert not any(
+            state.get("logs", [{}])[0].get("text") == "- 已接收文件: large.srt"
+            for state in JOB_STATE.values()
+        )
+
+    def test_translate_rejects_invalid_srt_content(self, client, tmp_path):
+        """Test files with .srt names still need parseable SRT content."""
+        test_file = tmp_path / "invalid.srt"
+        test_file.write_text("not actually subtitles", encoding="utf-8")
+
+        with open(test_file, "rb") as f:
+            response = client.post(
+                "/api/translate",
+                files={"file": ("invalid.srt", f, "application/octet-stream")},
+                data={"api_key": "test-key"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "error"
+        assert "No valid SRT entries found" in data["error"]
+
+    def test_translate_chooses_non_overwriting_output_path(self, client, tmp_path):
+        """Test output paths do not overwrite existing translated subtitles."""
+        existing = tmp_path / "translated_test.srt"
+        existing.write_text("keep me", encoding="utf-8")
+        test_file = tmp_path / "test.srt"
+        test_file.write_text(
+            "1\n00:00:01,000 --> 00:00:03,500\nHello\n",
+            encoding="utf-8",
+        )
+
+        with patch("api_server.process_translation_job", new_callable=AsyncMock):
+            with open(test_file, "rb") as f:
                 response = client.post(
-                    "/api/quality-check",
-                    files={
-                        "original_file": ("original.srt", original_f, "application/octet-stream"),
-                        "translated_file": ("translated.srt", translated_f, "application/octet-stream"),
-                    },
+                    "/api/translate",
+                    files={"file": ("test.srt", f, "application/octet-stream")},
+                    data={"api_key": "test-key", "save_path": str(tmp_path)},
+                )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert Path(data["expected_output"]).name == "translated_test_1.srt"
+
+        job_id = data["job_id"]
+        JOB_STATE.pop(job_id, None)
+        JOB_TASKS.pop(job_id, None)
+
+    def test_translate_uses_same_non_overwriting_suffix_for_merged_output(
+        self, client, tmp_path
+    ):
+        """Test merged/report outputs share the chosen non-overwriting suffix."""
+        (tmp_path / "merged_test.srt").write_text("keep me", encoding="utf-8")
+        test_file = tmp_path / "test.srt"
+        test_file.write_text(
+            "1\n00:00:01,000 --> 00:00:03,500\nHello\n",
+            encoding="utf-8",
+        )
+
+        with patch("api_server.process_translation_job", new_callable=AsyncMock):
+            with open(test_file, "rb") as f:
+                response = client.post(
+                    "/api/translate",
+                    files={"file": ("test.srt", f, "application/octet-stream")},
                     data={
                         "api_key": "test-key",
-                        "model_name": "test-model",
+                        "save_path": str(tmp_path),
+                        "save_merged_subtitles": "true",
                     },
                 )
 
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
-        assert "job_id" in data
-        assert "expected_output" in data
+        assert Path(data["expected_output"]).name == "translated_test_1.srt"
+        assert Path(data["expected_merged_output"]).name == "merged_test_1.srt"
+        assert Path(data["expected_report_output"]).name == (
+            "translated_test_1.agent-report.json"
+        )
 
         job_id = data["job_id"]
-        assert job_id in JOB_STATE
-
-        del JOB_STATE[job_id]
+        JOB_STATE.pop(job_id, None)
         JOB_TASKS.pop(job_id, None)
 
 
@@ -167,6 +261,61 @@ class TestStatusEndpoint:
 
         # Cleanup
         del JOB_STATE[job_id]
+
+    def test_status_requires_local_auth_when_token_is_configured(
+        self, client, monkeypatch
+    ):
+        """Test status endpoint rejects missing local auth token."""
+        monkeypatch.setenv("NBL_SUBTITLE_API_TOKEN", "secret-token")
+
+        response = client.get("/api/status/nonexistent-id")
+
+        assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_process_translation_job_exposes_warning_completion(tmp_path):
+    job_id = "warning-job"
+    input_path = tmp_path / "input.srt"
+    output_path = tmp_path / "translated.srt"
+    input_path.write_text("input", encoding="utf-8")
+    JOB_STATE[job_id] = {"status": "pending", "logs": [], "error": None}
+    result = StreamingAgentResult(
+        output_path=output_path,
+        report_path=tmp_path / "translated.agent-report.json",
+        block_count=2,
+        translated_count=1,
+        fallback_original_count=1,
+        status="completed_with_warnings",
+        successful_ratio=0.5,
+    )
+    config = TranslatorConfig(api_key="key", model_name="m", summary_model_name="m")
+
+    with patch("api_server.StreamingAgentPipeline.run_file", new_callable=AsyncMock) as run:
+        run.return_value = result
+        await process_translation_job(job_id, input_path, output_path, None, config)
+
+    assert JOB_STATE[job_id]["status"] == "completed_with_warnings"
+    assert JOB_STATE[job_id]["stats"]["fallback_original_count"] == 1
+    JOB_STATE.pop(job_id, None)
+
+
+@pytest.mark.asyncio
+async def test_process_translation_job_marks_task_level_failure_as_error(tmp_path):
+    job_id = "failed-job"
+    input_path = tmp_path / "input.srt"
+    output_path = tmp_path / "translated.srt"
+    input_path.write_text("input", encoding="utf-8")
+    JOB_STATE[job_id] = {"status": "pending", "logs": [], "error": None}
+    config = TranslatorConfig(api_key="key", model_name="m", summary_model_name="m")
+
+    with patch("api_server.StreamingAgentPipeline.run_file", new_callable=AsyncMock) as run:
+        run.side_effect = LLMCallError("authentication failed")
+        await process_translation_job(job_id, input_path, output_path, None, config)
+
+    assert JOB_STATE[job_id]["status"] == "error"
+    assert "authentication failed" in JOB_STATE[job_id]["error"]
+    JOB_STATE.pop(job_id, None)
 
 
 class TestCancelEndpoint:
@@ -227,3 +376,22 @@ class TestCancelEndpoint:
 
         # Cleanup
         del JOB_STATE[job_id]
+
+    def test_cancel_requires_local_auth_when_token_is_configured(
+        self, client, monkeypatch
+    ):
+        """Test cancel endpoint rejects missing local auth token."""
+        monkeypatch.setenv("NBL_SUBTITLE_API_TOKEN", "secret-token")
+
+        response = client.post("/api/cancel/nonexistent-id")
+
+        assert response.status_code == 401
+
+
+def test_health_requires_local_auth_when_token_is_configured(client, monkeypatch):
+    """Test health endpoint participates in the sidecar auth handshake."""
+    monkeypatch.setenv("NBL_SUBTITLE_API_TOKEN", "secret-token")
+
+    response = client.get("/api/health")
+
+    assert response.status_code == 401

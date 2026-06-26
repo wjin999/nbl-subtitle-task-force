@@ -19,10 +19,6 @@ from openai import (
 logger = logging.getLogger(__name__)
 
 
-class LLMCallError(RuntimeError):
-    """Raised when an LLM API call fails after retry handling."""
-
-
 class APIErrorType(Enum):
     """API 错误类型分类。"""
     RATE_LIMIT = "rate_limit"      # 429 - 可重试
@@ -31,6 +27,20 @@ class APIErrorType(Enum):
     BAD_REQUEST = "bad_request"     # 400 - 不可重试
     SERVER = "server"               # 500+ - 可重试
     UNKNOWN = "unknown"
+
+
+class LLMCallError(RuntimeError):
+    """Raised when an LLM API call cannot be completed after retry handling."""
+
+    def __init__(
+        self,
+        message: str,
+        error_type: APIErrorType = APIErrorType.UNKNOWN,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.error_type = error_type
+        self.retryable = retryable
 
 
 def classify_error(error: Exception) -> tuple[APIErrorType, bool]:
@@ -80,6 +90,8 @@ async def call_llm_async(
         Response content as string, empty string on failure
     """
     last_error: Optional[Exception] = None
+    last_error_type = APIErrorType.UNKNOWN
+    last_retryable = False
     
     for attempt in range(max_retries):
         try:
@@ -99,6 +111,8 @@ async def call_llm_async(
         except Exception as e:
             last_error = e
             error_type, retryable = classify_error(e)
+            last_error_type = error_type
+            last_retryable = retryable
             
             if not retryable:
                 logger.error(f"Non-retryable error ({error_type.value}): {e}")
@@ -119,7 +133,11 @@ async def call_llm_async(
     
     if last_error:
         logger.error(f"All {max_retries} retries failed. Last error: {last_error}")
-        raise LLMCallError(f"LLM API call failed: {last_error}") from last_error
+        raise LLMCallError(
+            f"LLM API call failed ({last_error_type.value}): {last_error}",
+            error_type=last_error_type,
+            retryable=last_retryable,
+        ) from last_error
     
     return ""
 

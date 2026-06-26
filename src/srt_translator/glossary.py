@@ -65,6 +65,14 @@ class Glossary:
     def __bool__(self) -> bool:
         return len(self._terms) > 0
 
+    def items(self):
+        """Return glossary term pairs."""
+        return self._terms.items()
+
+    def to_dict(self) -> Dict[str, str]:
+        """Return a plain dictionary copy."""
+        return dict(self._terms)
+
 
 def _parse_glossary_lines(lines: list[str]) -> Glossary:
     """从行列表解析术语表。

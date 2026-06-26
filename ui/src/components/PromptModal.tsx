@@ -13,8 +13,8 @@ interface Props {
 
 function getModalTitle(type: ModalType): string {
   switch (type) {
-    case "sum": return "概括提示词";
-    case "trans": return "翻译提示词";
+    case "sum": return "Agent 分析提示词";
+    case "trans": return "Agent 翻译提示词";
     case "glossary": return "自定义术语表";
     default: return "";
   }
@@ -43,13 +43,13 @@ export default function PromptModal(props: Props) {
       <div className="ti8-modal">
         <div className="modal-top">
           <span>{getModalTitle(activeModal)}</span>
-          <button onClick={() => setActiveModal(null)}>
+          <button className="modal-save" onClick={() => setActiveModal(null)}>
             确认保存
           </button>
         </div>
 
         {activeModal === "glossary" && (
-          <div style={{ fontSize: '12px', color: '#5c8577', marginBottom: '10px', lineHeight: '1.4' }}>
+          <div className="glossary-hint">
             * 此内容直接提供给大模型作为翻译参考。<br />
             * 建议格式：原文: 译文（冒号中英皆可），每行一个。<br />
             * 示例：<br />
@@ -61,7 +61,7 @@ export default function PromptModal(props: Props) {
         <textarea
           value={getModalValue(props)}
           onChange={(e) => setValue(e.target.value)}
-          style={{ height: activeModal === "glossary" ? '220px' : '320px' }}
+          className={activeModal === "glossary" ? "is-glossary" : ""}
           spellCheck={false}
         />
       </div>
